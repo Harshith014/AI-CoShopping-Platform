@@ -4,6 +4,7 @@ import { io } from 'socket.io-client';
 const ROOM = 'ROOM-9001';
 // Empty by default so local Vite/Nginx proxies continue to use this origin.
 // Set VITE_SOCKET_URL to the Render service origin for a Vercel deployment.
+const API = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/+$/, '');
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || undefined;
 const DealRoomContext = createContext(null);
 
@@ -98,7 +99,7 @@ export function DealRoomProvider({ children }) {
     let disposed = false;
     async function refresh() {
       try {
-        const response = await fetch(`/api/rooms/${ROOM}/state`, { headers: { 'x-user-id': user } });
+        const response = await fetch(`${API}/rooms/${ROOM}/state`, { headers: { 'x-user-id': user } });
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.error || 'Could not load this deal room.');
         if (!disposed) dispatch({ type: 'hydrate', payload });
@@ -124,7 +125,7 @@ export function DealRoomProvider({ children }) {
   }, [user]);
 
   const refresh = async () => {
-    const response = await fetch(`/api/rooms/${ROOM}/state`, { headers: { 'x-user-id': user } });
+    const response = await fetch(`${API}/rooms/${ROOM}/state`, { headers: { 'x-user-id': user } });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || 'Could not refresh this deal room.');
     dispatch({ type: 'hydrate', payload });
