@@ -141,6 +141,8 @@ The Nginx proxy is only used by the local Docker Compose web container. For a sp
 
 Vite embeds `VITE_` values into the browser bundle at build time, so they are public URLs, not secret storage. Redeploy the Vercel project after changing them. Keep database credentials and Redis credentials only in Render's environment settings. The frontend defaults to relative `/api` and same-origin Socket.IO when these Vite variables are absent, preserving local Docker/Nginx behavior.
 
+For Render's Docker service form, select **Docker**, leave Root Directory blank, and leave Dockerfile Path and Docker Context blank (their defaults use the repository-root `Dockerfile` and context). Leave native Node build/start command fields unused; Render builds the Dockerfile and runs its `CMD`. The Docker image listens on Render's injected `PORT` (default `10000`). The image's default command starts the API and worker as separate processes together for a free Web Service deployment. Docker Compose overrides that command to keep them in separate local services.
+
 ### 3. Build and start all services
 
 Make sure Docker Desktop is running, then run:
