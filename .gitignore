@@ -1,0 +1,27 @@
+# Dependencies and generated builds
+node_modules/
+dist/
+coverage/
+.npm-cache/
+
+# Local credentials and machine-specific environment
+.env
+.env.*
+!.env.example
+*.local
+
+# Logs and diagnostic output
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local generated data / scratch output
+outputs/
+work/
+
+# Operating system and editor files
+.DS_Store
+Thumbs.db
+*.tsbuildinfo
