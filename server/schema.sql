@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS offers (
   source_message_id BIGINT,
   code TEXT NOT NULL,
   percent INTEGER NOT NULL,
+  product_id TEXT NOT NULL DEFAULT 'PRD-01',
+  min_quantity INTEGER NOT NULL DEFAULT 2,
   expires_at TIMESTAMPTZ NOT NULL,
   active BOOLEAN NOT NULL DEFAULT true
 );
@@ -52,6 +54,8 @@ CREATE TABLE IF NOT EXISTS orders (
 ALTER TABLE rooms ADD COLUMN IF NOT EXISTS cart_version INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE offers ADD COLUMN IF NOT EXISTS code TEXT;
 ALTER TABLE offers ADD COLUMN IF NOT EXISTS source_message_id BIGINT;
+ALTER TABLE offers ADD COLUMN IF NOT EXISTS product_id TEXT NOT NULL DEFAULT 'PRD-01';
+ALTER TABLE offers ADD COLUMN IF NOT EXISTS min_quantity INTEGER NOT NULL DEFAULT 2;
 UPDATE offers SET code = 'ROOM-' || upper(substr(replace(id::text, '-', ''), 1, 8)) WHERE code IS NULL;
 ALTER TABLE offers ALTER COLUMN code SET NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS offers_code_unique_idx ON offers(code);
@@ -70,5 +74,9 @@ INSERT INTO rooms (id, name, members) VALUES ('ROOM-9001', 'The good stuff room'
 INSERT INTO products (id,name,description,price_cents,stock) VALUES
 ('PRD-01','Titanium Pro Laptop','High-performance workstation.',120000,4),
 ('PRD-02','Wireless Ergonomic Mouse','Reduces wrist strain during long sessions.',8500,50),
-('PRD-03','4K Ultra-Wide Monitor','34-inch curved display.',45000,1)
+('PRD-03','4K Ultra-Wide Monitor','34-inch curved display.',45000,1),
+('PRD-04','Studio Mechanical Keyboard','Tactile low-profile keys for focused work.',14500,24),
+('PRD-05','Compact USB-C Dock','One-cable hub for displays, power, and peripherals.',18900,16),
+('PRD-06','Studio Noise-Canceling Headphones','Wireless over-ear sound with active noise cancellation.',24900,12),
+('PRD-07','4K Desk Webcam','Crisp video with a wide, adjustable field of view.',15900,20)
 ON CONFLICT (id) DO NOTHING;

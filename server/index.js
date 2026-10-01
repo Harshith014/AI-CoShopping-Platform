@@ -41,7 +41,10 @@ async function snapshot(roomId) {
     db.query('SELECT id,name,members,cart_version FROM rooms WHERE id=$1', [roomId]),
     db.query('SELECT id,name,description,price_cents,stock FROM products ORDER BY id'),
     db.query(`SELECT p.id,p.name,p.description,p.price_cents,p.stock,c.quantity FROM cart_items c JOIN products p ON p.id=c.product_id WHERE c.room_id=$1 ORDER BY p.id`, [roomId]),
-    db.query('SELECT id,code,percent,expires_at FROM offers WHERE room_id=$1 AND active=true AND expires_at>clock_timestamp() ORDER BY expires_at DESC LIMIT 1', [roomId]),
+    db.query(`SELECT o.id,o.code,o.percent,o.product_id,o.min_quantity,o.expires_at,p.name AS product_name
+      FROM offers o LEFT JOIN products p ON p.id=o.product_id
+      WHERE o.room_id=$1 AND o.active=true AND o.expires_at>clock_timestamp()
+      ORDER BY o.expires_at DESC LIMIT 1`, [roomId]),
     db.query('SELECT id,user_id,kind,body,created_at FROM messages WHERE room_id=$1 ORDER BY id DESC LIMIT 80', [roomId]),
     db.query('SELECT id,total_cents,subtotal_cents,discount_cents,offer_code,payment_status,items,created_at FROM orders WHERE room_id=$1 ORDER BY created_at DESC LIMIT 1', [roomId])
   ]);
@@ -127,11 +130,11 @@ app.post('/api/rooms/:roomId/checkout', async (req, reply) => {
     const cart = await client.query(`SELECT p.id,p.name,p.price_cents,p.stock,c.quantity FROM cart_items c JOIN products p ON p.id=c.product_id WHERE c.room_id=$1 ORDER BY p.id FOR UPDATE OF p`, [roomId]);
     if (!cart.rowCount) { await client.query('ROLLBACK'); return reply.code(409).send({ error: 'The shared cart is empty.' }); }
     for (const item of cart.rows) if (item.quantity > item.stock) { await client.query('ROLLBACK'); return reply.code(409).send({ error: `${item.name} no longer has enough stock.` }); }
-    const active = await client.query('SELECT id,code,percent FROM offers WHERE room_id=$1 AND active=true AND expires_at>clock_timestamp() ORDER BY expires_at DESC LIMIT 1', [roomId]);
+    const active = await client.query('SELECT id,code,percent,product_id,min_quantity FROM offers WHERE room_id=$1 AND active=true AND expires_at>clock_timestamp() ORDER BY expires_at DESC LIMIT 1', [roomId]);
     const subtotal = cart.rows.reduce((sum, i) => sum + i.price_cents * i.quantity, 0);
-    const bundle = cart.rows.find(i => i.id === 'PRD-01');
-    const qualifies = active.rowCount > 0 && requestedOfferCode === active.rows[0].code && Number(bundle?.quantity || 0) >= 2;
-    const discount = qualifies ? Math.round(bundle.price_cents * bundle.quantity * active.rows[0].percent / 100) : 0;
+    const offerProduct = active.rowCount ? cart.rows.find(i => i.id === active.rows[0].product_id) : null;
+    const qualifies = active.rowCount > 0 && requestedOfferCode === active.rows[0].code && Number(offerProduct?.quantity || 0) >= Number(active.rows[0].min_quantity);
+    const discount = qualifies ? Math.round(offerProduct.price_cents * offerProduct.quantity * active.rows[0].percent / 100) : 0;
     const total = subtotal - discount;
     for (const i of cart.rows) await client.query('UPDATE products SET stock=stock-$2 WHERE id=$1', [i.id, i.quantity]);
     const orderId = randomUUID();

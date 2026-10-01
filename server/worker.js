@@ -13,48 +13,132 @@ async function negotiate(job) {
   const { roomId, text, userId } = job.data;
   broadcast(roomId, 'ai_typing', { active: true, jobId: job.id });
   await wait(10_000);
-  const lower = text.toLowerCase();
-  let answer = lower.includes('laptop')
-    ? 'The Titanium Pro is a high-performance workstation. Add two to your shared bag and ask me about the bundle offer.'
-    : lower.includes('discount') || lower.includes('deal') || lower.includes('offer')
-      ? 'I can keep an eye out for a bundle. Add two Titanium Pro laptops to your shared bag and ask me to check the deal.'
-      : 'Happy to help you compare. The Titanium Pro is a high-performance workstation, the ergonomic mouse is $85, and the ultra-wide monitor is $450. Ask me about a bundle deal any time.';
+  const lower = text.toLowerCase().replace(/[^a-z0-9$./ -]/g, ' ');
+  const [catalogResult, cartResult] = await Promise.all([
+    db.query('SELECT id,name,description,price_cents,stock FROM products ORDER BY id'),
+    db.query(`SELECT p.id,p.name,p.price_cents,c.quantity FROM cart_items c JOIN products p ON p.id=c.product_id WHERE c.room_id=$1 ORDER BY p.id`, [roomId])
+  ]);
+  const products = catalogResult.rows;
+  const cart = cartResult.rows;
+  const aliases = {
+    'PRD-01': ['laptop', 'laptops', 'titanium pro', 'workstation', 'computer', 'notebook'],
+    'PRD-02': ['mouse', 'mice', 'wireless mouse', 'ergonomic mouse', 'wireless ergonomic'],
+    'PRD-03': ['monitor', 'monitors', 'display', 'screen', 'ultra wide', 'ultrawide', '4k'],
+    'PRD-04': ['keyboard', 'keyboards', 'mechanical keyboard', 'keys'],
+    'PRD-05': ['dock', 'docking station', 'usb c dock', 'hub'],
+    'PRD-06': ['headphone', 'headphones', 'headset', 'noise canceling', 'noise cancelling'],
+    'PRD-07': ['webcam', 'web camera', 'camera']
+  };
+  const mentioned = products.filter(product => {
+    const terms = [product.name.toLowerCase(), ...(aliases[product.id] || [])];
+    return terms.some(term => lower.includes(term));
+  });
+  const wantsOffer = /\b(discount|deal|offer|coupon|code|save|cheaper|haggle|bundle|special price|price cut)\b/.test(lower);
+  const wantsCatalog = /\b(all|catalog|catalogue|products|items|what do you sell|what's available|what is available)\b/.test(lower);
+  const wantsStock = /\b(stock|inventory|available|availability|out of stock|in stock|left|remaining)\b/.test(lower);
+  const wantsCount = /\b(how many|count|number of|total)\b/.test(lower);
+  const wantsCart = /\b(cart|bag|basket|shared)\b/.test(lower);
+  const wantsCompare = /\b(compare|difference|versus|\bvs\b|recommend|recommendation|best|which)\b/.test(lower);
+  const offerRules = {
+    'PRD-01': { percent: 20, minQuantity: 2, label: 'two-laptop bundle' },
+    'PRD-02': { percent: 15, minQuantity: 2, label: 'two-mouse bundle' },
+    'PRD-03': { percent: 10, minQuantity: 1, label: 'monitor offer' },
+    'PRD-04': { percent: 15, minQuantity: 1, label: 'keyboard offer' },
+    'PRD-05': { percent: 12, minQuantity: 1, label: 'dock offer' },
+    'PRD-06': { percent: 15, minQuantity: 1, label: 'headphone offer' },
+    'PRD-07': { percent: 10, minQuantity: 1, label: 'webcam offer' }
+  };
+  const money = cents => `$${(Number(cents) / 100).toFixed(2)}`;
+  const availability = product => product.stock > 0 ? `${product.stock} in stock` : 'currently out of stock';
+  const catalogLine = product => `${product.name} — ${product.description} Price: ${money(product.price_cents)}; ${availability(product)}.`;
+  const cartFor = product => cart.find(item => item.id === product.id);
+  let answer;
   let offer = null;
-  if (lower.includes('laptop') && (lower.includes('two') || lower.includes('2') || lower.includes('buy'))) {
-    const client = await db.connect();
-    try {
-      await client.query('BEGIN');
-      await client.query('SELECT id FROM rooms WHERE id=$1 FOR UPDATE', [roomId]);
-      const prior = await client.query('SELECT id,code,percent,expires_at,active,expires_at>clock_timestamp() AS unexpired FROM offers WHERE source_message_id=$1', [job.data.messageId]);
-      if (prior.rowCount) {
-        if (prior.rows[0].active && prior.rows[0].unexpired) {
-          offer = prior.rows[0];
-          const version = await client.query('SELECT cart_version FROM rooms WHERE id=$1', [roomId]);
-          offer.cartVersion = version.rows[0].cart_version;
-          answer = `Deal unlocked. Use code ${offer.code} for 20% off the two Titanium Pro laptops in your shared bag. It expires in three minutes.`;
-        } else {
-          answer = 'That bundle offer has expired. Ask me again while two Titanium Pro laptops are in your shared bag.';
-        }
-        await client.query('COMMIT');
-      } else {
-        const quantities = await client.query('SELECT COALESCE(SUM(quantity),0)::int AS qty FROM cart_items WHERE room_id=$1 AND product_id=$2', [roomId, 'PRD-01']);
-        if (quantities.rows[0].qty >= 2) {
-          await client.query('UPDATE offers SET active=false WHERE room_id=$1 AND active=true', [roomId]);
-          const id = randomUUID();
-          const code = `ROOM20-${randomBytes(4).toString('hex').toUpperCase()}`;
-          const result = await client.query(`INSERT INTO offers(id,room_id,source_message_id,code,percent,expires_at) VALUES($1,$2,$3,$4,20,clock_timestamp()+interval '3 minutes') RETURNING id,code,percent,expires_at`, [id, roomId, job.data.messageId, code]);
-          offer = result.rows[0];
-          const version = await client.query('UPDATE rooms SET cart_version=cart_version+1 WHERE id=$1 RETURNING cart_version', [roomId]);
-          offer.cartVersion = version.rows[0].cart_version;
-          answer = `Deal unlocked. Use code ${offer.code} for 20% off the two Titanium Pro laptops in your shared bag. It expires in exactly three minutes.`;
+
+  if (wantsOffer && mentioned.length === 1) {
+    const product = mentioned[0];
+    const rule = offerRules[product.id] || { percent: 10, minQuantity: 1, label: 'room offer' };
+    const inCart = cartFor(product);
+    if (product.stock <= 0) {
+      answer = `${product.name} is currently out of stock, so I can't create an offer for it right now. I can help you choose another item.`;
+    } else if (Number(inCart?.quantity || 0) < rule.minQuantity) {
+      const requirement = rule.minQuantity === 1 ? 'add it to the shared bag' : `have ${rule.minQuantity} in the shared bag`;
+      answer = `I can unlock ${rule.percent}% off ${rule.label} for three minutes. ${product.name} needs to ${requirement}; the room currently has ${Number(inCart?.quantity || 0)}.`;
+    } else {
+      const client = await db.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query('SELECT id FROM rooms WHERE id=$1 FOR UPDATE', [roomId]);
+        const prior = await client.query('SELECT id,code,percent,product_id,min_quantity,expires_at,active,expires_at>clock_timestamp() AS unexpired FROM offers WHERE source_message_id=$1', [job.data.messageId]);
+        if (prior.rowCount) {
+          if (prior.rows[0].active && prior.rows[0].unexpired) {
+            offer = prior.rows[0];
+            const currentProduct = products.find(item => item.id === offer.product_id) || product;
+            offer.product_name = currentProduct.name;
+            const version = await client.query('SELECT cart_version FROM rooms WHERE id=$1', [roomId]);
+            offer.cartVersion = version.rows[0].cart_version;
+            answer = `Your ${offer.percent}% ${currentProduct.name} offer is active. Use code ${offer.code}; it expires in three minutes.`;
+          } else {
+            answer = 'That offer is no longer active. Ask me again while the qualifying item is in your shared bag.';
+          }
           await client.query('COMMIT');
         } else {
-          await client.query('COMMIT');
-          answer = 'I can offer 20% off a two-laptop bundle for three minutes. Add both Titanium Pro laptops to your shared bag and I’ll unlock it.';
+          // Re-check after acquiring the room lock so a stale cart snapshot cannot mint an offer.
+          const current = await client.query('SELECT quantity FROM cart_items WHERE room_id=$1 AND product_id=$2', [roomId, product.id]);
+          if (Number(current.rows[0]?.quantity || 0) < rule.minQuantity) {
+            await client.query('COMMIT');
+            answer = `I can unlock ${rule.percent}% off ${rule.label} for three minutes. Add the qualifying quantity to the shared bag, then ask me again.`;
+          } else {
+            await client.query('UPDATE offers SET active=false WHERE room_id=$1 AND active=true', [roomId]);
+            const id = randomUUID();
+            const code = `ROOM${rule.percent}-${randomBytes(4).toString('hex').toUpperCase()}`;
+            const result = await client.query(`INSERT INTO offers(id,room_id,source_message_id,code,percent,product_id,min_quantity,expires_at)
+              VALUES($1,$2,$3,$4,$5,$6,$7,clock_timestamp()+interval '3 minutes')
+              RETURNING id,code,percent,product_id,min_quantity,expires_at`, [id, roomId, job.data.messageId, code, rule.percent, product.id, rule.minQuantity]);
+            offer = { ...result.rows[0], product_name: product.name };
+            const version = await client.query('UPDATE rooms SET cart_version=cart_version+1 WHERE id=$1 RETURNING cart_version', [roomId]);
+            offer.cartVersion = version.rows[0].cart_version;
+            await client.query('COMMIT');
+            answer = `Deal unlocked: ${offer.percent}% off ${product.name} in your shared bag. Use code ${offer.code} within three minutes.`;
+          }
         }
+      } catch (e) { await client.query('ROLLBACK'); throw e; } finally { client.release(); }
+      if (offer) {
+        console.log(`Created ${offer.percent}% offer ${offer.code} for ${offer.product_name || product.name} in room ${roomId}`);
+        broadcast(roomId, 'offer_created', { offer, cartVersion: offer.cartVersion });
       }
-    } catch (e) { await client.query('ROLLBACK'); throw e; } finally { client.release(); }
-    if (offer) broadcast(roomId, 'offer_created', { offer, cartVersion: offer.cartVersion });
+    }
+  } else if (wantsOffer && mentioned.length > 1) {
+    answer = `I can create one timed room offer at a time. Which item should I check: ${mentioned.map(p => p.name).join(', ')}?`;
+  } else if (wantsOffer) {
+    answer = 'I can check a three-minute room offer for any item: 20% off two laptops, 15% off two mice, 10% off a monitor, 15% off a keyboard, 12% off a USB-C dock, 15% off headphones, or 10% off a webcam. Add the qualifying item(s) to your shared bag, then ask me about that product.';
+  } else if (mentioned.length === 1) {
+    const product = mentioned[0];
+    answer = `${catalogLine(product)} ${product.stock > 0 ? `It's available to add to your shared bag. Ask me for a timed deal on it too.` : 'I can help you compare it with the other items.'}`;
+  } else if (mentioned.length > 1 || wantsCompare) {
+    const available = products.filter(product => product.stock > 0);
+    const recommendation = available.find(product => product.id === 'PRD-02') || available[0];
+    const recommendationText = recommendation
+      ? `For a practical desk setup, consider the ${recommendation.name}.`
+      : 'Everything is currently out of stock.';
+    answer = products.length
+      ? `Here's the quick comparison:\n${products.map(catalogLine).join('\n')}\n${recommendationText}`
+      : 'The catalog is empty right now, so I can’t compare products yet.';
+  } else if (wantsCatalog && !wantsStock && !wantsCount) {
+    answer = products.length
+      ? `Here are all ${products.length} products in the catalog:\n${products.map(catalogLine).join('\n')}`
+      : 'There are no products in the catalog right now.';
+  } else if (wantsCart) {
+    answer = cart.length
+      ? `Your shared bag has ${cart.reduce((sum, item) => sum + Number(item.quantity), 0)} item(s): ${cart.map(item => `${item.quantity} × ${item.name} (${money(item.price_cents * item.quantity)})`).join(', ')}. Subtotal: ${money(cart.reduce((sum, item) => sum + item.price_cents * item.quantity, 0))}.`
+      : 'Your shared bag is empty at the moment. Add something from the catalog and I’ll keep both shoppers in sync.';
+  } else if (wantsStock || wantsCount || wantsCatalog) {
+    const out = products.filter(product => Number(product.stock) <= 0);
+    const available = products.filter(product => Number(product.stock) > 0);
+    const units = products.reduce((sum, product) => sum + Number(product.stock), 0);
+    answer = `The catalog has ${products.length} distinct products; ${available.length} are in stock and ${out.length} are out of stock, with ${units} units available in total. ${out.length ? `Out of stock: ${out.map(product => product.name).join(', ')}.` : 'Everything currently has stock.'} Ask about a product for its description, price, and exact stock.`;
+  } else {
+    answer = 'I can describe products, compare prices and stock, summarize the shared bag, or check a timed discount. Our catalog includes a Titanium Pro Laptop, Wireless Ergonomic Mouse, 4K Ultra-Wide Monitor, Studio Mechanical Keyboard, Compact USB-C Dock, Studio Noise-Canceling Headphones, and 4K Desk Webcam. What would help?';
   }
 
   // Stream the mock answer in small pieces to every connected shopper.

@@ -9,7 +9,7 @@ A real-time co-shopping demo where two invited shoppers use one shared cart, cha
 - Shared cart updates broadcast to all connected shoppers in a room through Socket.IO.
 - PostgreSQL transactions serialize checkout, verify the cart version, reserve inventory once, record a simulated order, and emit `Checkout_Complete` after commit. An idempotency key protects retries.
 - Chat requests are saved by the API and submitted to BullMQ in Redis. A separate worker waits ten seconds, then streams a deterministic mock response to the whole room.
-- Asking for a two-laptop deal while at least two laptops are in the shared cart creates a unique 20% laptop bundle code, valid for three minutes according to PostgreSQL server time.
+- The queued concierge can explain and compare catalog items, report inventory and stock counts, summarize the shared bag, and create short-lived, product-specific mock offers.
 - A worker checks PostgreSQL for expired offers and removes them from the active room state without relying on browser timers. It broadcasts `Offer_Expired` when an offer expires.
 - Socket.IO reconnects automatically; the browser reloads the room snapshot from the API to restore the cart, products, active offer, recent chat, and latest order.
 - Docker Compose starts the web server, API/WebSocket gateway, background worker, PostgreSQL, and Redis.
@@ -139,7 +139,7 @@ The Nginx proxy is only used by the local Docker Compose web container. For a sp
 | Vercel frontend | `VITE_API_BASE_URL` | The Render service URL plus `/api`, for example `https://your-api.onrender.com/api`. |
 | Vercel frontend | `VITE_SOCKET_URL` | The Render service origin, for example `https://your-api.onrender.com` (no `/api`). |
 
-Vite embeds `VITE_` values into the browser bundle at build time, so they are public URLs, not secret storage. Redeploy the Vercel project after changing them. Keep database credentials and Redis credentials only in Render's environment settings. The frontend defaults to relative `/api` and same-origin Socket.IO when these Vite variables are absent, preserving local Docker/Nginx behavior.
+Vite embeds `VITE_` values into the browser bundle at build time, so they are public URLs, not secret storage. The frontend derives its REST API origin from `VITE_SOCKET_URL` when provided, keeping API and Socket.IO pointed at the same backend. `VITE_API_BASE_URL` is the fallback for an API-only remote setup. Redeploy the Vercel project after changing these values. Keep database credentials and Redis credentials only in Render's environment settings. The frontend defaults to relative `/api` and same-origin Socket.IO when these Vite variables are absent, preserving local Docker/Nginx behavior.
 
 For Render's Docker service form, select **Docker**, leave Root Directory blank, and leave Dockerfile Path and Docker Context blank (their defaults use the repository-root `Dockerfile` and context). Leave native Node build/start command fields unused; Render builds the Dockerfile and runs its `CMD`. The Docker image listens on Render's injected `PORT` (default `10000`). The image's default command starts the API and worker as separate processes together for a free Web Service deployment. Docker Compose overrides that command to keep them in separate local services.
 
@@ -160,7 +160,9 @@ The first build may take a few minutes. PostgreSQL creates the schema and sample
 
 The seeded room is `ROOM-9001`, with demo shoppers `U-101` and `U-102`. Use the two-avatar button in the app to switch shopper identity. For a multiplayer check, open the app in two browser windows and select a different shopper in each. Add an item in one window and confirm it appears in the other.
 
-To try the complete offer flow, add two Titanium Pro laptops, then ask the concierge: **“Can we get a deal on two laptops?”** The worker waits ten seconds before streaming its response. When eligible, a 20% code appears and expires after three minutes according to the backend. Use **Checkout together** to record a simulated order.
+The concierge is a keyword-driven mock that reads the current product catalog, stock, and shared bag from PostgreSQL after the queued job's ten-second negotiation delay. Try asking it to describe a product, compare the catalog, count products or out-of-stock items, or summarize the shared bag. Responses are streamed to both shoppers through Socket.IO; no paid AI API is used.
+
+Offers are also mocked and scoped to the item they discount. Add the required quantity, then ask for a deal on that product: two Titanium Pro laptops unlock 20% off, two Wireless Ergonomic Mice unlock 15% off, one 4K Ultra-Wide Monitor unlocks 10% off, one Studio Mechanical Keyboard unlocks 15% off, one Compact USB-C Dock unlocks 12% off, one pair of Studio Noise-Canceling Headphones unlocks 15% off, and one 4K Desk Webcam unlocks 10% off. Each code expires in three minutes according to the backend. Checkout validates the active code, target product, and required quantity inside its database transaction.
 
 ### 5. Stop or reset the stack
 
@@ -206,5 +208,5 @@ docker compose logs -f api worker
 ## Notes
 
 - The API uses the `x-user-id` header and verifies membership against the seeded room. This is a demo identity check, not user authentication.
-- Only `ROOM-9001` and the three sample products are seeded by default. Seed inserts do not overwrite existing database rows; deleting Compose volumes resets the sample stock and data.
+- Only `ROOM-9001` and the seven sample products are seeded by default. Seed inserts add new product IDs on startup but do not overwrite existing product rows or stock; deleting Compose volumes resets the sample stock and data.
 - No external AI or payment API is called. The concierge reply and payment result are mocked locally.

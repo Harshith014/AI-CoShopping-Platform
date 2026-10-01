@@ -50,7 +50,7 @@ function reducer(state, action) {
       : { ...state, messages: [...state.messages, action.message] };
     case 'offer-created': {
       if (action.cartVersion != null && state.room && Number(action.cartVersion) < Number(state.room.cart_version)) return state;
-      return { ...state, offer: action.offer, room: action.cartVersion != null ? { ...(state.room || {}), cart_version: action.cartVersion } : state.room, notice: 'A private 20% bundle offer just landed' };
+      return { ...state, offer: action.offer, room: action.cartVersion != null ? { ...(state.room || {}), cart_version: action.cartVersion } : state.room, notice: `A private ${action.offer.percent}% ${action.offer.product_name || 'bundle'} offer just landed` };
     }
     case 'offer-expired': {
       const matches = state.offer?.id === action.offerId;
