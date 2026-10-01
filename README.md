@@ -9,7 +9,7 @@ A real-time co-shopping demo where two invited shoppers use one shared cart, cha
 - Shared cart updates broadcast to all connected shoppers in a room through Socket.IO.
 - PostgreSQL transactions serialize checkout, verify the cart version, reserve inventory once, record a simulated order, and emit `Checkout_Complete` after commit. An idempotency key protects retries.
 - Chat requests are saved by the API and submitted to BullMQ in Redis. A separate worker waits ten seconds, then streams a deterministic mock response to the whole room.
-- The queued concierge can explain and compare catalog items, report inventory and stock counts, summarize the shared bag, and create short-lived, product-specific mock offers.
+- The queued concierge answers from live PostgreSQL room state: product descriptions/prices/stock, catalog counts, the shared cart and totals, active offers, invited room members, recent chat, and the latest simulated order. It uses deterministic keyword/intent rules and never calls a paid AI API.
 - A worker checks PostgreSQL for expired offers and removes them from the active room state without relying on browser timers. It broadcasts `Offer_Expired` when an offer expires.
 - Socket.IO reconnects automatically; the browser reloads the room snapshot from the API to restore the cart, products, active offer, recent chat, and latest order.
 - Docker Compose starts the web server, API/WebSocket gateway, background worker, PostgreSQL, and Redis.
